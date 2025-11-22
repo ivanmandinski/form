@@ -1,0 +1,37 @@
+[phases.setup]
+nixPkgs = [
+    "php82",
+    "php82Packages.composer",
+    "nodejs_20",
+    "glib",
+    "nss",
+    "atk",
+    "at-spi2-atk",
+    "libdrm",
+    "xorg.libXcomposite",
+    "xorg.libXdamage",
+    "xorg.libXrandr",
+    "mesa",
+    "xorg.libXScrnSaver",
+    "alsa-lib",
+    "cairo",
+    "pango",
+    "gdk-pixbuf",
+    "gtk3",
+    "libxkbcommon",
+    "xorg.libxshmfence",
+    "chromium"
+]
+
+[phases.install]
+cmds = [
+    "rm -rf bootstrap/cache/*.php",
+    "composer install --no-dev --optimize-autoloader --no-scripts",
+    "php artisan package:discover --ansi",
+    "npm ci",
+    "npm run build"
+]
+
+[start]
+cmd = "bash .railway/start.sh"
+

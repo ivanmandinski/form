@@ -1,0 +1,43 @@
+# IMMEDIATE FIX: Use DATABASE_URL (Railway provides this!)
+# 
+# The error you're seeing means individual variables contain connection string
+# parameters, not clean values. Railway provides DATABASE_URL which Laravel
+# can parse correctly.
+# 
+# IMPORTANT: Use Railway's "Reference" feature to set this up correctly!
+
+# =============================================================================
+# DATABASE CONFIGURATION - Use DATABASE_URL
+# =============================================================================
+# Step 1: Delete these variables if they exist (they cause the error):
+# - DB_HOST
+# - DB_PORT
+# - DB_DATABASE
+# - DB_USERNAME
+# - DB_PASSWORD
+
+# Step 2: Add these two variables:
+DB_CONNECTION=pgsql
+DATABASE_URL=${{Postgres.DATABASE_URL}}
+
+# Step 3: Use Railway's Reference Feature:
+# 1. Click "Add Variable"
+# 2. Type: DATABASE_URL
+# 3. Click "Reference" button (link icon)
+# 4. Select "Postgres" service
+# 5. Select "DATABASE_URL"
+# 6. Railway auto-creates the correct reference
+
+# =============================================================================
+# IMPORTANT NOTES:
+# =============================================================================
+# 1. Railway uses PGHOST, PGPORT, PGDATABASE, PGUSER, PGPASSWORD
+#    NOT DB_HOST, DB_PORT, etc. in the service variables
+# 
+# 2. Make sure your PostgreSQL service name is exactly "Postgres"
+#    (case-sensitive)
+# 
+# 3. After adding these, Railway will auto-redeploy
+# 
+# 4. Check Railway logs to verify the connection works
+
