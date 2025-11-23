@@ -247,22 +247,27 @@ class PuppeteerFormChecker {
     // Track start time for timeout management
     this.startTime = Date.now();
     
+    // Extract timeout early so it's available in catch block
+    const {
+      url,
+      selectorType,
+      selectorValue,
+      fieldMappings = [],
+      successSelector = null,
+      errorSelector = null,
+      timeout = 30000,
+      waitForJavaScript = true,
+      executeJavaScript = null,
+      waitForElements = [],
+      customActions = [],
+      captchaExpected = false,
+      validationRules = {}
+    } = config;
+    
+    // Store timeout on instance for access in catch block
+    this.timeout = timeout;
+    
     try {
-      const {
-        url,
-        selectorType,
-        selectorValue,
-        fieldMappings = [],
-        successSelector = null,
-        errorSelector = null,
-        timeout = 30000,
-        waitForJavaScript = true,
-        executeJavaScript = null,
-        waitForElements = [],
-        customActions = [],
-        captchaExpected = false,
-        validationRules = {}
-      } = config;
 
       this.captchaMonitorEnabled = captchaExpected;
       this.captchaDetected = false;
@@ -557,6 +562,8 @@ class PuppeteerFormChecker {
 
     } catch (error) {
       // Check if this is a timeout error
+      // Use this.timeout which was set at the start, or fallback to default
+      const timeout = this.timeout || 30000;
       const elapsedTime = Date.now() - (this.startTime || Date.now());
       const isTimeout = elapsedTime >= timeout || error.message.includes('timeout') || error.message.includes('Timeout');
       
