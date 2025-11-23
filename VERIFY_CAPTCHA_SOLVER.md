@@ -230,3 +230,4 @@ To verify 2captcha is being used:
 
 If all checks pass, 2captcha is working correctly! 🎉
 
+
