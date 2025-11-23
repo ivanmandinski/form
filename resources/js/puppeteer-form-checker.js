@@ -582,9 +582,6 @@ class PuppeteerFormChecker {
         console.error('Could not get debug info:', debugError.message);
       }
 
-      const elapsedTime = Date.now() - (this.startTime || Date.now());
-      const isTimeout = elapsedTime >= timeout || error.message.includes('timeout') || error.message.includes('Timeout');
-      
       return {
         success: false,
         status: isTimeout ? 'timeout' : 'error',
