@@ -282,15 +282,31 @@ class PuppeteerFormChecker {
       // Limit CAPTCHA solving timeout to prevent total timeout from being exceeded
       // Reserve at least 60 seconds for page loading and form submission
       const maxCaptchaTimeout = Math.max(60000, (timeout - 60000)); // At least 60s, but leave 60s buffer
+      const captchaApiKey = process.env.CAPTCHA_SOLVER_API_KEY || '';
+      const captchaProvider = process.env.CAPTCHA_SOLVER_PROVIDER || '2captcha';
       const captchaConfig = {
-        apiKey: process.env.CAPTCHA_SOLVER_API_KEY || '',
-        provider: process.env.CAPTCHA_SOLVER_PROVIDER || '2captcha',
+        apiKey: captchaApiKey,
+        provider: captchaProvider,
         timeout: Math.min(parseInt(process.env.CAPTCHA_SOLVER_TIMEOUT || '120000', 10), maxCaptchaTimeout),
-        enabled: process.env.CAPTCHA_SOLVER_ENABLED !== 'false' && !!process.env.CAPTCHA_SOLVER_API_KEY
+        enabled: process.env.CAPTCHA_SOLVER_ENABLED !== 'false' && !!captchaApiKey
       };
       this.captchaSolver = new CaptchaSolver(captchaConfig);
       
-      this.logStep('run.start', { url, captchaExpected, captchaSolvingEnabled: this.captchaSolver.isEnabled() });
+      // Log CAPTCHA solver configuration (without exposing full API key)
+      const apiKeyPreview = captchaApiKey ? `${captchaApiKey.substring(0, 8)}...${captchaApiKey.substring(captchaApiKey.length - 4)}` : 'NOT SET';
+      console.error(`🔐 CAPTCHA Solver Configuration:`);
+      console.error(`   Provider: ${captchaProvider}`);
+      console.error(`   API Key: ${apiKeyPreview}`);
+      console.error(`   Enabled: ${this.captchaSolver.isEnabled()}`);
+      console.error(`   Timeout: ${captchaConfig.timeout}ms`);
+      
+      this.logStep('run.start', { 
+        url, 
+        captchaExpected, 
+        captchaSolvingEnabled: this.captchaSolver.isEnabled(),
+        captchaProvider: captchaProvider,
+        captchaApiKeySet: !!captchaApiKey
+      });
 
       // Use stderr for logging to avoid interfering with JSON output
       console.error(`Visiting: ${url}`);

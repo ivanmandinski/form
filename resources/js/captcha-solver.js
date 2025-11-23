@@ -14,6 +14,14 @@ export class CaptchaSolver {
     this.timeout = config.timeout || 120000; // 2 minutes default
     this.enabled = config.enabled !== false && !!this.apiKey;
     
+    // Log initialization for debugging
+    if (this.enabled) {
+      const apiKeyPreview = this.apiKey ? `${this.apiKey.substring(0, 8)}...${this.apiKey.substring(this.apiKey.length - 4)}` : 'NOT SET';
+      console.error(`✅ CAPTCHA Solver initialized: ${this.provider} (API Key: ${apiKeyPreview})`);
+    } else {
+      console.error(`⚠️ CAPTCHA Solver disabled: No API key configured`);
+    }
+    
     // reCAPTCHA test keys (always pass)
     this.testKeys = {
       siteKey: '6LeIxAcTAAAAAJcZVRqyHh71UMIEGNQ_MXjiZKhI',
@@ -116,9 +124,16 @@ export class CaptchaSolver {
     const apiUrl = 'https://2captcha.com/in.php';
     const checkUrl = 'https://2captcha.com/res.php';
 
+    console.error(`🔄 Submitting CAPTCHA to 2captcha API...`);
+    console.error(`   Site Key: ${siteKey.substring(0, 20)}...`);
+    console.error(`   Page URL: ${pageUrl}`);
+
     try {
       // Submit CAPTCHA to 2captcha
-      const submitResponse = await axios.get(`${apiUrl}?key=${this.apiKey}&method=userrecaptcha&googlekey=${siteKey}&pageurl=${encodeURIComponent(pageUrl)}&json=1`);
+      const submitUrl = `${apiUrl}?key=${this.apiKey}&method=userrecaptcha&googlekey=${siteKey}&pageurl=${encodeURIComponent(pageUrl)}&json=1`;
+      console.error(`   API URL: ${apiUrl} (key hidden)`);
+      
+      const submitResponse = await axios.get(submitUrl);
       const submitData = submitResponse.data;
 
       if (submitData.status !== 1) {
@@ -126,25 +141,35 @@ export class CaptchaSolver {
       }
 
       const taskId = submitData.request;
-      console.error(`CAPTCHA submitted to 2captcha, task ID: ${taskId}`);
+      console.error(`✅ CAPTCHA submitted to 2captcha successfully`);
+      console.error(`   Task ID: ${taskId}`);
+      console.error(`   Status: ${submitData.status === 1 ? 'OK' : 'ERROR'}`);
 
       // Poll for solution
       const startTime = Date.now();
+      let pollCount = 0;
       while (Date.now() - startTime < this.timeout) {
+        pollCount++;
         await new Promise(resolve => setTimeout(resolve, 5000)); // Wait 5 seconds
 
+        console.error(`   Polling for solution (attempt ${pollCount})...`);
         const checkResponse = await axios.get(`${checkUrl}?key=${this.apiKey}&action=get&id=${taskId}&json=1`);
         const checkData = checkResponse.data;
 
         if (checkData.status === 1) {
-          console.error(`CAPTCHA solved by 2captcha: ${checkData.request.substring(0, 50)}...`);
+          const elapsed = Math.round((Date.now() - startTime) / 1000);
+          console.error(`✅ CAPTCHA solved by 2captcha successfully!`);
+          console.error(`   Time taken: ${elapsed} seconds`);
+          console.error(`   Token preview: ${checkData.request.substring(0, 50)}...`);
           return checkData.request; // This is the g-recaptcha-response token
         }
 
         if (checkData.request === 'CAPCHA_NOT_READY') {
+          console.error(`   Status: Not ready yet, continuing to poll...`);
           continue; // Keep polling
         }
 
+        console.error(`❌ 2captcha API error: ${checkData.request}`);
         throw new Error(`2captcha solving failed: ${checkData.request}`);
       }
 

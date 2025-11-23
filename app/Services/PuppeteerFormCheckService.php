@@ -16,8 +16,8 @@ class PuppeteerFormCheckService
     public function __construct()
     {
         $this->puppeteerScript = resource_path('js/puppeteer-form-checker.js');
-        // Use config timeout, default to 300 seconds (5 minutes) to allow for CAPTCHA solving
-        $this->timeout = config('form-monitor.timeouts.puppeteer', 300);
+        // Use config timeout, default to 360 seconds (6 minutes) to allow for CAPTCHA solving and network delays
+        $this->timeout = config('form-monitor.timeouts.puppeteer', 360);
     }
 
     /**
@@ -28,9 +28,10 @@ class PuppeteerFormCheckService
     {
         // Set PHP execution time limit for this process
         $originalTimeLimit = ini_get('max_execution_time');
-        // Use the same timeout as the process timeout, add buffer for overhead
-        $timeout = $this->timeout + 60; // Add 60 seconds buffer for PHP overhead
-        set_time_limit($timeout);
+        // Use timeout + buffer for PHP overhead + process overhead
+        // Script timeout is (timeout - 60) seconds, process timeout is (timeout + 60) seconds
+        $phpTimeout = $this->timeout + 120; // Add 120 seconds buffer for PHP and process overhead
+        set_time_limit($phpTimeout);
 
         try {
             $result = $this->runPuppeteerCheck($formTarget);
@@ -124,7 +125,7 @@ class PuppeteerFormCheckService
             })->toArray(),
             'successSelector' => $formTarget->success_selector,
             'errorSelector' => $formTarget->error_selector,
-            'timeout' => ($this->timeout - 30) * 1000, // Convert to milliseconds, subtract 30s buffer for process overhead
+            'timeout' => ($this->timeout - 60) * 1000, // Convert to milliseconds, subtract 60s buffer for process overhead
             'waitForJavaScript' => $formTarget->uses_js ?? true,
             'executeJavaScript' => $formTarget->execute_javascript ?? null,
             'waitForElements' => $formTarget->wait_for_elements ?? [],
@@ -142,7 +143,10 @@ class PuppeteerFormCheckService
             $configJson
         ]);
 
-        $process->setTimeout($this->timeout);
+        // Set process timeout higher than script timeout to allow for completion
+        // Script timeout is (timeout - 60) seconds, so add buffer for process overhead
+        $processTimeout = $this->timeout + 60; // Add 60 seconds buffer beyond script timeout
+        $process->setTimeout($processTimeout);
         $process->setWorkingDirectory(base_path());
 
         // Set environment variables
@@ -200,9 +204,20 @@ class PuppeteerFormCheckService
         
         $process->setEnv($env);
 
+        // Log CAPTCHA solver configuration for verification
+        $captchaApiKey = config('form-monitor.captcha.api_key', '');
+        $captchaProvider = config('form-monitor.captcha.provider', '2captcha');
+        $apiKeyPreview = $captchaApiKey ? substr($captchaApiKey, 0, 8) . '...' . substr($captchaApiKey, -4) : 'NOT SET';
+        
         Log::info('Running Puppeteer form check', [
             'form_target_id' => $formTarget->id,
             'url' => $formTarget->target->url,
+            'captcha_solver' => [
+                'provider' => $captchaProvider,
+                'api_key_set' => !empty($captchaApiKey),
+                'api_key_preview' => $apiKeyPreview,
+                'enabled' => !empty($captchaApiKey),
+            ],
         ]);
 
         try {
