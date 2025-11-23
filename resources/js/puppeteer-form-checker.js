@@ -244,6 +244,9 @@ class PuppeteerFormChecker {
   }
 
   async checkForm(config) {
+    // Track start time for timeout management
+    this.startTime = Date.now();
+    
     try {
       const {
         url,
@@ -271,10 +274,13 @@ class PuppeteerFormChecker {
       this.captchaDetails = { detected: false, selectors: [], errors: [] };
       
       // Initialize CAPTCHA solver if enabled
+      // Limit CAPTCHA solving timeout to prevent total timeout from being exceeded
+      // Reserve at least 60 seconds for page loading and form submission
+      const maxCaptchaTimeout = Math.max(60000, (timeout - 60000)); // At least 60s, but leave 60s buffer
       const captchaConfig = {
         apiKey: process.env.CAPTCHA_SOLVER_API_KEY || '',
         provider: process.env.CAPTCHA_SOLVER_PROVIDER || '2captcha',
-        timeout: parseInt(process.env.CAPTCHA_SOLVER_TIMEOUT || '120000', 10),
+        timeout: Math.min(parseInt(process.env.CAPTCHA_SOLVER_TIMEOUT || '120000', 10), maxCaptchaTimeout),
         enabled: process.env.CAPTCHA_SOLVER_ENABLED !== 'false' && !!process.env.CAPTCHA_SOLVER_API_KEY
       };
       this.captchaSolver = new CaptchaSolver(captchaConfig);
@@ -364,6 +370,15 @@ class PuppeteerFormChecker {
         if (this.captchaSolver && this.captchaSolver.isEnabled()) {
           console.error('CAPTCHA detected - attempting to solve...');
           try {
+            // Check remaining time before starting CAPTCHA solving
+            const elapsedTime = Date.now() - this.startTime;
+            const remainingTime = timeout - elapsedTime;
+            const minTimeForCaptcha = 60000; // Need at least 60 seconds for CAPTCHA
+            
+            if (remainingTime < minTimeForCaptcha) {
+              throw new Error(`Insufficient time remaining for CAPTCHA solving. Remaining: ${remainingTime}ms, Required: ${minTimeForCaptcha}ms`);
+            }
+            
             const solved = await this.captchaSolver.solve(this.page, url);
             if (solved) {
               this.captchaSolved = true;
@@ -376,6 +391,8 @@ class PuppeteerFormChecker {
             console.error('CAPTCHA solving failed:', solveError.message);
             this.logStep('captcha.solve.error', { error: solveError.message });
             this.captchaDetails.errors.push(solveError.message);
+            // Don't throw - continue with form submission even if CAPTCHA solving failed
+            // The form will likely fail, but we'll get proper error feedback
           }
         } else {
           console.error('CAPTCHA detected but solving is disabled (no API key configured)');
@@ -398,9 +415,13 @@ class PuppeteerFormChecker {
       this.logStep('form.submitted');
 
       // Wait for response and check for form submission indicators
+      // Use shorter timeouts to prevent total timeout from being exceeded
       console.error('Waiting for page response...');
+      const remainingTime = timeout - (Date.now() - (this.startTime || Date.now()));
+      const safeNetworkTimeout = Math.min(networkIdleTimeout, Math.max(5000, remainingTime - 10000));
+      
       try {
-        await this.page.waitForNetworkIdle({ timeout: networkIdleTimeout });
+        await this.page.waitForNetworkIdle({ timeout: safeNetworkTimeout });
         console.error('Network is idle');
         this.logStep('network.idle');
       } catch (networkError) {
@@ -408,8 +429,11 @@ class PuppeteerFormChecker {
         this.logStep('network.idle.timeout', { message: networkError.message });
       }
 
+      const remainingTimeAfterNetwork = timeout - (Date.now() - (this.startTime || Date.now()));
+      const safePageLoadTimeout = Math.min(30000, Math.max(5000, remainingTimeAfterNetwork - 5000));
+      
       try {
-        await this.page.waitForFunction(() => document.readyState === 'complete', { timeout: 30000 });
+        await this.page.waitForFunction(() => document.readyState === 'complete', { timeout: safePageLoadTimeout });
         console.error('Page is fully loaded');
         this.logStep('page.load.complete');
       } catch (loadError) {
@@ -417,10 +441,13 @@ class PuppeteerFormChecker {
         this.logStep('page.load.timeout', { message: loadError.message });
       }
 
-      // Additional wait for form processing
+      // Additional wait for form processing (reduced to prevent timeout)
       console.error('Waiting for form processing...');
+      const remainingTimeFinal = timeout - (Date.now() - (this.startTime || Date.now()));
+      const safeProcessingWait = Math.min(3000, Math.max(1000, remainingTimeFinal - 2000));
+      
       try {
-        await this.waitFor(3000); // Wait 3 seconds for form processing
+        await this.waitFor(safeProcessingWait);
       } catch (timeoutError) {
         console.error('Form processing wait timeout');
         this.logStep('form.processing.timeout', { message: timeoutError.message });
@@ -529,8 +556,15 @@ class PuppeteerFormChecker {
       };
 
     } catch (error) {
+      // Check if this is a timeout error
+      const elapsedTime = Date.now() - (this.startTime || Date.now());
+      const isTimeout = elapsedTime >= timeout || error.message.includes('timeout') || error.message.includes('Timeout');
+      
       console.error('Form check failed:', error.message);
       console.error('Error stack:', error.stack);
+      if (isTimeout) {
+        console.error(`Timeout occurred after ${elapsedTime}ms (limit: ${timeout}ms)`);
+      }
 
       // Try to get current page info for debugging
       let currentUrl = 'unknown';
@@ -548,8 +582,12 @@ class PuppeteerFormChecker {
         console.error('Could not get debug info:', debugError.message);
       }
 
+      const elapsedTime = Date.now() - (this.startTime || Date.now());
+      const isTimeout = elapsedTime >= timeout || error.message.includes('timeout') || error.message.includes('Timeout');
+      
       return {
         success: false,
+        status: isTimeout ? 'timeout' : 'error',
         error: error.message,
         stack: error.stack,
         debugInfo: {
@@ -559,6 +597,9 @@ class PuppeteerFormChecker {
           steps: this.debugSteps,
           validation: this.validationLog,
           classification: this.classificationLog,
+          elapsedTime: elapsedTime,
+          timeout: timeout,
+          isTimeout: isTimeout,
           timestamp: new Date().toISOString()
         }
       };
