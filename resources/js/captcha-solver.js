@@ -148,11 +148,22 @@ export class CaptchaSolver {
       // Poll for solution
       const startTime = Date.now();
       let pollCount = 0;
-      while (Date.now() - startTime < this.timeout) {
+      const maxPollTime = this.timeout;
+      
+      while (Date.now() - startTime < maxPollTime) {
         pollCount++;
+        const elapsed = Date.now() - startTime;
+        const remaining = maxPollTime - elapsed;
+        
+        // Don't wait if we're close to timeout
+        if (remaining < 6000) {
+          console.error(`   Approaching timeout, stopping poll (remaining: ${Math.round(remaining/1000)}s)`);
+          break;
+        }
+        
         await new Promise(resolve => setTimeout(resolve, 5000)); // Wait 5 seconds
 
-        console.error(`   Polling for solution (attempt ${pollCount})...`);
+        console.error(`   Polling for solution (attempt ${pollCount}, elapsed: ${Math.round(elapsed/1000)}s, remaining: ${Math.round(remaining/1000)}s)...`);
         const checkResponse = await axios.get(`${checkUrl}?key=${this.apiKey}&action=get&id=${taskId}&json=1`);
         const checkData = checkResponse.data;
 

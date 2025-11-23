@@ -313,9 +313,14 @@ class PuppeteerFormChecker {
       this.logStep('navigation.request', { url, timeout });
       const networkIdleTimeout = parseInt(process.env.PUPPETEER_IDLE_TIMEOUT_MS || '15000', 10);
 
+      // Use a reasonable timeout for page navigation (60s), not the full script timeout
+      // This leaves time for CAPTCHA solving and form submission
+      const navigationTimeout = Math.min(60000, timeout * 0.2); // Max 60s or 20% of total timeout
+      console.error(`Navigation timeout: ${Math.round(navigationTimeout/1000)}s (total script timeout: ${Math.round(timeout/1000)}s)`);
+
       const navigationResponse = await this.page.goto(url, {
         waitUntil: ['domcontentloaded', 'networkidle2'],
-        timeout: timeout
+        timeout: navigationTimeout
       });
       const navigationDetails = await this.snapshotResponse(navigationResponse);
       this.logStep('navigation.response', navigationDetails || { warning: 'no response' });
@@ -396,11 +401,25 @@ class PuppeteerFormChecker {
             const remainingTime = timeout - elapsedTime;
             const minTimeForCaptcha = 60000; // Need at least 60 seconds for CAPTCHA
             
+            console.error(`Time check: Elapsed: ${Math.round(elapsedTime/1000)}s, Remaining: ${Math.round(remainingTime/1000)}s, Total timeout: ${Math.round(timeout/1000)}s`);
+            
             if (remainingTime < minTimeForCaptcha) {
-              throw new Error(`Insufficient time remaining for CAPTCHA solving. Remaining: ${remainingTime}ms, Required: ${minTimeForCaptcha}ms`);
+              const errorMsg = `Insufficient time remaining for CAPTCHA solving. Remaining: ${Math.round(remainingTime/1000)}s, Required: ${Math.round(minTimeForCaptcha/1000)}s`;
+              console.error(`⚠️ ${errorMsg}`);
+              throw new Error(errorMsg);
             }
             
-            const solved = await this.captchaSolver.solve(this.page, url);
+            // Set a timeout for CAPTCHA solving to prevent infinite waiting
+            const captchaTimeout = Math.min(remainingTime - 30000, this.captchaSolver.timeout); // Leave 30s buffer, but don't exceed solver timeout
+            console.error(`Starting CAPTCHA solving with timeout: ${Math.round(captchaTimeout/1000)}s`);
+            
+            const solved = await Promise.race([
+              this.captchaSolver.solve(this.page, url),
+              new Promise((_, reject) => 
+                setTimeout(() => reject(new Error(`CAPTCHA solving timeout after ${Math.round(captchaTimeout/1000)}s`)), captchaTimeout)
+              )
+            ]);
+            
             if (solved) {
               this.captchaSolved = true;
               console.error('CAPTCHA solved successfully');
@@ -420,6 +439,15 @@ class PuppeteerFormChecker {
         }
       }
 
+      // Check timeout before form operations
+      const elapsedBeforeForm = Date.now() - this.startTime;
+      const remainingBeforeForm = timeout - elapsedBeforeForm;
+      const minTimeForFormOps = 30000; // Need at least 30 seconds for form fill + submit
+      
+      if (remainingBeforeForm < minTimeForFormOps) {
+        throw new Error(`Insufficient time remaining for form operations. Elapsed: ${Math.round(elapsedBeforeForm/1000)}s, Remaining: ${Math.round(remainingBeforeForm/1000)}s, Required: ${Math.round(minTimeForFormOps/1000)}s`);
+      }
+
       // Fill form fields with advanced interaction
       if (fieldMappings && fieldMappings.length > 0) {
         console.error(`Filling ${fieldMappings.length} form fields...`);
@@ -427,6 +455,13 @@ class PuppeteerFormChecker {
       } else {
         console.error('No form fields to fill - attempting Smart Auto-Fill...');
         await this.autoFillForm(formSelector);
+      }
+
+      // Check timeout again before submission
+      const elapsedBeforeSubmit = Date.now() - this.startTime;
+      const remainingBeforeSubmit = timeout - elapsedBeforeSubmit;
+      if (remainingBeforeSubmit < 15000) {
+        throw new Error(`Insufficient time remaining for form submission. Remaining: ${Math.round(remainingBeforeSubmit/1000)}s`);
       }
 
       // Submit form with advanced methods
@@ -438,8 +473,17 @@ class PuppeteerFormChecker {
       // Wait for response and check for form submission indicators
       // Use shorter timeouts to prevent total timeout from being exceeded
       console.error('Waiting for page response...');
-      const remainingTime = timeout - (Date.now() - (this.startTime || Date.now()));
-      const safeNetworkTimeout = Math.min(networkIdleTimeout, Math.max(5000, remainingTime - 10000));
+      const elapsedAfterSubmit = Date.now() - this.startTime;
+      const remainingAfterSubmit = timeout - elapsedAfterSubmit;
+      
+      // Check if we've exceeded timeout
+      if (remainingAfterSubmit <= 0) {
+        throw new Error(`Script timeout exceeded. Elapsed: ${Math.round(elapsedAfterSubmit/1000)}s, Timeout: ${Math.round(timeout/1000)}s`);
+      }
+      
+      // Use remaining time, but cap at reasonable limits
+      const safeNetworkTimeout = Math.min(networkIdleTimeout, Math.max(5000, remainingAfterSubmit - 20000)); // Leave 20s buffer
+      console.error(`Network idle timeout: ${Math.round(safeNetworkTimeout/1000)}s (remaining: ${Math.round(remainingAfterSubmit/1000)}s)`);
       
       try {
         await this.page.waitForNetworkIdle({ timeout: safeNetworkTimeout });
@@ -450,8 +494,15 @@ class PuppeteerFormChecker {
         this.logStep('network.idle.timeout', { message: networkError.message });
       }
 
-      const remainingTimeAfterNetwork = timeout - (Date.now() - (this.startTime || Date.now()));
-      const safePageLoadTimeout = Math.min(30000, Math.max(5000, remainingTimeAfterNetwork - 5000));
+      const elapsedAfterNetwork = Date.now() - this.startTime;
+      const remainingAfterNetwork = timeout - elapsedAfterNetwork;
+      
+      if (remainingAfterNetwork <= 0) {
+        throw new Error(`Script timeout exceeded after network wait. Elapsed: ${Math.round(elapsedAfterNetwork/1000)}s`);
+      }
+      
+      const safePageLoadTimeout = Math.min(30000, Math.max(5000, remainingAfterNetwork - 10000)); // Leave 10s buffer
+      console.error(`Page load timeout: ${Math.round(safePageLoadTimeout/1000)}s (remaining: ${Math.round(remainingAfterNetwork/1000)}s)`);
       
       try {
         await this.page.waitForFunction(() => document.readyState === 'complete', { timeout: safePageLoadTimeout });
@@ -464,8 +515,15 @@ class PuppeteerFormChecker {
 
       // Additional wait for form processing (reduced to prevent timeout)
       console.error('Waiting for form processing...');
-      const remainingTimeFinal = timeout - (Date.now() - (this.startTime || Date.now()));
-      const safeProcessingWait = Math.min(3000, Math.max(1000, remainingTimeFinal - 2000));
+      const elapsedFinal = Date.now() - this.startTime;
+      const remainingFinal = timeout - elapsedFinal;
+      
+      if (remainingFinal <= 0) {
+        throw new Error(`Script timeout exceeded. Elapsed: ${Math.round(elapsedFinal/1000)}s`);
+      }
+      
+      const safeProcessingWait = Math.min(3000, Math.max(1000, remainingFinal - 5000)); // Leave 5s buffer
+      console.error(`Processing wait: ${Math.round(safeProcessingWait/1000)}s (remaining: ${Math.round(remainingFinal/1000)}s)`);
       
       try {
         await this.waitFor(safeProcessingWait);

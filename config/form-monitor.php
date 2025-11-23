@@ -15,7 +15,7 @@ return [
     'timeouts' => [
         'http' => env('FORM_MONITOR_HTTP_TIMEOUT', 30),
         'dusk' => env('FORM_MONITOR_DUSK_TIMEOUT', 60),
-        'puppeteer' => env('FORM_MONITOR_PUPPETEER_TIMEOUT', 360), // 6 minutes default to allow for CAPTCHA solving
+        'puppeteer' => env('FORM_MONITOR_PUPPETEER_TIMEOUT', 420), // 7 minutes default to allow for CAPTCHA solving and network delays
     ],
     
     'concurrency' => [
