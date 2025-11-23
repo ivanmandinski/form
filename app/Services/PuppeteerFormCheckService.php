@@ -147,6 +147,9 @@ class PuppeteerFormCheckService
         $env = $_ENV;
         $env['PUPPETEER_HEADLESS'] = config('form-monitor.puppeteer.headless', 'true');
         $env['CAPTCHA_SOLVER_API_KEY'] = config('form-monitor.captcha.api_key', '');
+        $env['CAPTCHA_SOLVER_PROVIDER'] = config('form-monitor.captcha.provider', '2captcha');
+        $env['CAPTCHA_SOLVER_TIMEOUT'] = (string)(config('form-monitor.captcha.timeout', 120) * 1000); // Convert to milliseconds
+        $env['CAPTCHA_SOLVER_ENABLED'] = config('form-monitor.captcha.api_key') ? 'true' : 'false';
         $env['PUPPETEER_EXECUTABLE_PATH'] = env('PUPPETEER_EXECUTABLE_PATH', $env['PUPPETEER_EXECUTABLE_PATH'] ?? '');
         $env['PUPPETEER_PRODUCT'] = env('PUPPETEER_PRODUCT', $env['PUPPETEER_PRODUCT'] ?? 'chrome');
 

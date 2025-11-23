@@ -5,6 +5,7 @@ import StealthPlugin from 'puppeteer-extra-plugin-stealth';
 import AdblockerPlugin from 'puppeteer-extra-plugin-adblocker';
 import UserDataDirPlugin from 'puppeteer-extra-plugin-user-data-dir';
 import UserPreferencesPlugin from 'puppeteer-extra-plugin-user-preferences';
+import CaptchaSolver from './captcha-solver.js';
 
 // Add stealth plugin to avoid detection
 puppeteer.use(StealthPlugin());
@@ -24,8 +25,8 @@ puppeteer.use(UserPreferencesPlugin({
   }
 }));
 
-// NOTE: CAPTCHA solver plugins are intentionally disabled.
-// We only detect CAPTCHA presence/blocking to respect user sites.
+// CAPTCHA solving is now enabled when API key is configured.
+// Use test keys for development or configure a solving service for production.
 
 class PuppeteerFormChecker {
   constructor() {
@@ -35,6 +36,8 @@ class PuppeteerFormChecker {
     this.lastFormSelector = null;
     this.captchaMonitorEnabled = false;
     this.captchaDetected = false;
+    this.captchaSolved = false;
+    this.captchaSolver = null;
     this.debugSteps = [];
     this.validationLog = [];
     this.classificationLog = [];
@@ -260,12 +263,23 @@ class PuppeteerFormChecker {
 
       this.captchaMonitorEnabled = captchaExpected;
       this.captchaDetected = false;
+      this.captchaSolved = false;
       this.debugSteps = [];
       this.validationLog = [];
       this.classificationLog = [];
       this.validationRules = this.normalizeValidationRules(validationRules);
       this.captchaDetails = { detected: false, selectors: [], errors: [] };
-      this.logStep('run.start', { url, captchaExpected });
+      
+      // Initialize CAPTCHA solver if enabled
+      const captchaConfig = {
+        apiKey: process.env.CAPTCHA_SOLVER_API_KEY || '',
+        provider: process.env.CAPTCHA_SOLVER_PROVIDER || '2captcha',
+        timeout: parseInt(process.env.CAPTCHA_SOLVER_TIMEOUT || '120000', 10),
+        enabled: process.env.CAPTCHA_SOLVER_ENABLED !== 'false' && !!process.env.CAPTCHA_SOLVER_API_KEY
+      };
+      this.captchaSolver = new CaptchaSolver(captchaConfig);
+      
+      this.logStep('run.start', { url, captchaExpected, captchaSolvingEnabled: this.captchaSolver.isEnabled() });
 
       // Use stderr for logging to avoid interfering with JSON output
       console.error(`Visiting: ${url}`);
@@ -344,10 +358,28 @@ class PuppeteerFormChecker {
         this.logStep('custom.actions.complete');
       }
 
-      // Check for CAPTCHA presence (monitor mode only)
+      // Check for CAPTCHA presence and solve if enabled
       const captchaDetected = await this.detectAndSolveCaptcha();
       if (captchaDetected) {
-        console.error('CAPTCHA detected (monitor mode - solver disabled)');
+        if (this.captchaSolver && this.captchaSolver.isEnabled()) {
+          console.error('CAPTCHA detected - attempting to solve...');
+          try {
+            const solved = await this.captchaSolver.solve(this.page, url);
+            if (solved) {
+              this.captchaSolved = true;
+              console.error('CAPTCHA solved successfully');
+              this.logStep('captcha.solved', { success: true });
+              // Wait a bit for the token to be processed
+              await this.waitFor(2000);
+            }
+          } catch (solveError) {
+            console.error('CAPTCHA solving failed:', solveError.message);
+            this.logStep('captcha.solve.error', { error: solveError.message });
+            this.captchaDetails.errors.push(solveError.message);
+          }
+        } else {
+          console.error('CAPTCHA detected but solving is disabled (no API key configured)');
+        }
       }
 
       // Fill form fields with advanced interaction
@@ -484,6 +516,7 @@ class PuppeteerFormChecker {
           formSelector: formSelector,
           captchaExpected: this.captchaMonitorEnabled,
           captchaDetected,
+          captchaSolved: this.captchaSolved || false,
           captchaBlocking,
           validation,
           classification,
@@ -548,7 +581,25 @@ class PuppeteerFormChecker {
   async detectAndSolveCaptcha() {
     try {
       this.logStep('captcha.scan.start');
-      // Check for various CAPTCHA types
+      
+      // Use the CAPTCHA solver's detection method if available
+      if (this.captchaSolver) {
+        const captchaInfo = await this.captchaSolver.detectCaptcha(this.page);
+        if (captchaInfo) {
+          this.captchaDetected = true;
+          this.captchaDetails.selectors.push(captchaInfo.element);
+          this.captchaDetails.type = captchaInfo.type;
+          this.captchaDetails.siteKey = captchaInfo.siteKey;
+          this.logStep('captcha.selector.detected', { 
+            selector: captchaInfo.element,
+            type: captchaInfo.type,
+            siteKey: captchaInfo.siteKey.substring(0, 20) + '...'
+          });
+          return true;
+        }
+      }
+      
+      // Fallback to manual detection
       const captchaSelectors = [
         '.g-recaptcha',
         '.h-captcha',
@@ -624,20 +675,16 @@ class PuppeteerFormChecker {
   async isCaptchaBlockingSubmission() {
     try {
       // If no specific selectors matched, try auto-detection
-      // NOTE: successSelectors and errorSelectors are not defined in this context.
-      // Assuming they would be passed as arguments or be properties of 'this'.
-      // For now, this block will cause a ReferenceError if not defined elsewhere.
-      // To make this syntactically correct and runnable, I'm commenting out the condition
-      // and assuming autoDetectResult is always called if this block is reached.
-      // If the intent was to check for *any* selectors,    // If no specific selectors matched, try auto-detection
-      console.error(`Debug: successSelectors length: ${successSelectors.length}, errorSelectors length: ${errorSelectors.length}`);
+      const successSelectors = this.validationRules.successSelectors || [];
+      const errorSelectors = this.validationRules.errorSelectors || [];
+      
       if (successSelectors.length === 0 && errorSelectors.length === 0) {
         console.error('No selectors configured - attempting auto-detection...');
         const autoResult = await this.autoDetectResult();
         if (autoResult) {
           return autoResult;
         }
-      }  // }
+      }
 
       const pageText = await this.page.evaluate(() => document.body ? document.body.innerText.toLowerCase() : '');
       const blockingPhrases = [
